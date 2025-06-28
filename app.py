@@ -12,23 +12,20 @@ import base64
 from PyPDF2 import PdfReader, PdfWriter
 
 # --- Helper Functions ---
-def scrape_newspaper_images(date_str):
+def scrape_newspaper_images(date_str, edcode):
     """
-    Scrape all page image URLs for the given date from the newspaper site.
+    Scrape all page image URLs for the given date and edition code from the newspaper site.
     Returns a list of image URLs.
     """
-    # This is a placeholder. Actual implementation will depend on the site's structure.
-    # You may need to inspect the site to find the correct way to get image URLs for a date.
-    url = f"https://samajaepaper.in/indexnext.php?pagedate={date_str}"
+    url = f"https://samajaepaper.in/indexnext.php?pagedate={date_str}&edcode={edcode}"
     resp = requests.get(url)
     soup = BeautifulSoup(resp.content, 'html.parser')
-    # Example: Find all <img> tags with a specific class or attribute
     images = []
     for img in soup.find_all('img'):
         src = img.get('src')
         if src and 'epaperimages' in src:
             if not src.startswith('http'):
-                src = 'https://samajaepaper.in/' + src.lstrip('/')
+                src = 'https://samajaepaper.in/indexnext.php?pagedate={date_str}&edcode={edcode}/' + src.lstrip('/')
             images.append(src)
     return images
 
@@ -43,7 +40,7 @@ def download_images(image_urls):
 
 def merge_images_to_pdf(images, output_path):
     """Merge PIL Images into a single PDF file."""
-    # Ensure all images are in RGB mode and only merge, not duplicate
+    # Ensure all images are in RGB mode and only merge
     rgb_images = [img.convert('RGB') for img in images]
     if rgb_images:
         rgb_images[0].save(output_path, save_all=True, append_images=rgb_images[1:], format='PDF')
@@ -82,6 +79,7 @@ if not cohere_api_key:
     st.warning("Please enter the provided API Key to continue.")
     st.stop()
 
+
 # Validate Cohere API Key
 import cohere
 if cohere_api_key:
@@ -92,6 +90,17 @@ if cohere_api_key:
     except Exception as e:
         st.error("Invalid API Key. Please check your key and try again.")
         st.stop()
+
+# --- Edition Selection ---
+edition_names = [
+    "Cuttack", "Bhubaneswar", "Sambalpur", "Balasore", "Berhampur",
+    "Rourkela", "Angul", "Koraput", "Kolkata", "Vizag"
+]
+edition_codes = [71, 73, 74, 75, 76, 77, 78, 79, 80, 81]
+edition_map = dict(zip(edition_names, edition_codes))
+
+selected_edition = st.selectbox("Select Edition", edition_names)
+edcode = edition_map[selected_edition]
 
 # --- LangChain Agent Setup ---
 cohere_llm = Cohere(cohere_api_key=cohere_api_key)
@@ -127,13 +136,13 @@ if st.button("Download Newspaper"):
     with st.spinner("Processing..."):
         date_str = input_date.strftime('%Y-%m-%d')
         # Agent orchestrates the process
-        image_urls = scrape_newspaper_images(date_str)
+        image_urls = scrape_newspaper_images(date_str, edcode)
         if not image_urls:
-            st.error("No images found for this date.")
+            st.error("No images found for this date and edition.")
         else:
             images = download_images(image_urls)
             # Create a temp file with date in the filename
-            filename = f"Samaja_{date_str}.pdf"
+            filename = f"Samaja_{selected_edition}_{date_str}.pdf"
             with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_merged.pdf") as tmp_merged:
                 merged_pdf_path = merge_images_to_pdf(images, tmp_merged.name)
             # Split and keep only the second half

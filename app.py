@@ -37,7 +37,7 @@ def download_images(image_urls):
     images = []
     for url in image_urls:
         resp = requests.get(url)
-        img = Image.open(BytesIO(resp.content)).convert('RGB')
+        img = Image.open(BytesIO(resp.content))
         images.append(img)
     return images
 
@@ -72,14 +72,26 @@ def get_pdf_download_link(pdf_path):
 
 
 # --- Streamlit UI ---
-st.title("Merged Page Downloader")
+st.title("Merged Newspaper Downloader")
 st.write("Enter a date to download and merge all pages of the newspaper.")
 
 # User input for Cohere API Key
+
 cohere_api_key = st.text_input("Enter the provided Key", type="password")
 if not cohere_api_key:
     st.warning("Please enter the provided API Key to continue.")
     st.stop()
+
+# Validate Cohere API Key
+import cohere
+if cohere_api_key:
+    try:
+        co = cohere.Client(cohere_api_key)
+        # Use a minimal generate call for validation
+        _ = co.generate(prompt="Hello", max_tokens=1, model="command")
+    except Exception as e:
+        st.error("Invalid API Key. Please check your key and try again.")
+        st.stop()
 
 # --- LangChain Agent Setup ---
 cohere_llm = Cohere(cohere_api_key=cohere_api_key)
@@ -121,15 +133,25 @@ if st.button("Download Newspaper"):
         else:
             images = download_images(image_urls)
             # Create a temp file with date in the filename
-            filename = f"newspaper_{date_str}.pdf"
+            filename = f"Samaja_{date_str}.pdf"
             with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_merged.pdf") as tmp_merged:
                 merged_pdf_path = merge_images_to_pdf(images, tmp_merged.name)
             # Split and keep only the second half
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}.pdf") as tmp_half:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_secondhalf.pdf") as tmp_half:
                 total_pages, second_half_pdf_path = split_pdf_second_half(merged_pdf_path, tmp_half.name)
-            st.success(f"Merged PDF created!.")
+            # Now, split the second half to keep only the first 20 pages
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_first20.pdf") as tmp_first20:
+                reader = PdfReader(second_half_pdf_path)
+                writer = PdfWriter()
+                n_pages = min(20, len(reader.pages))
+                for i in range(n_pages):
+                    writer.add_page(reader.pages[i])
+                with open(tmp_first20.name, 'wb') as f:
+                    writer.write(f)
+                first20_pdf_path = tmp_first20.name
+            st.success(f"Merged PDF created! Only the first 20 pages are included.")
             # Provide download link with date-stamped filename
-            with open(second_half_pdf_path, "rb") as f:
+            with open(first20_pdf_path, "rb") as f:
                 data = f.read()
             import base64
             b64 = base64.b64encode(data).decode()
@@ -137,3 +159,4 @@ if st.button("Download Newspaper"):
             st.markdown(href, unsafe_allow_html=True)
             os.unlink(merged_pdf_path)
             os.unlink(second_half_pdf_path)
+            os.unlink(first20_pdf_path)

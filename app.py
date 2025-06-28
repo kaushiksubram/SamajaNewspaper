@@ -9,6 +9,7 @@ from io import BytesIO
 import os
 import tempfile
 import base64
+from PyPDF2 import PdfReader, PdfWriter
 
 # --- Helper Functions ---
 def scrape_newspaper_images(date_str):
@@ -42,9 +43,25 @@ def download_images(image_urls):
 
 def merge_images_to_pdf(images, output_path):
     """Merge PIL Images into a single PDF file."""
-    if images:
-        images[0].save(output_path, save_all=True, append_images=images[1:], format='PDF')
+    # Ensure all images are in RGB mode and only merge, not duplicate
+    rgb_images = [img.convert('RGB') for img in images]
+    if rgb_images:
+        rgb_images[0].save(output_path, save_all=True, append_images=rgb_images[1:], format='PDF')
     return output_path
+
+def split_pdf_second_half(input_pdf_path, output_pdf_path):
+    """Split the PDF and save only the second half to output_pdf_path."""
+    reader = PdfReader(input_pdf_path)
+    total_pages = len(reader.pages)
+    half = total_pages // 2
+    # If odd, second half is larger
+    start = half
+    writer = PdfWriter()
+    for i in range(start, total_pages):
+        writer.add_page(reader.pages[i])
+    with open(output_pdf_path, 'wb') as f:
+        writer.write(f)
+    return total_pages, output_pdf_path
 
 def get_pdf_download_link(pdf_path):
     with open(pdf_path, "rb") as f:
@@ -55,7 +72,7 @@ def get_pdf_download_link(pdf_path):
 
 
 # --- Streamlit UI ---
-st.title("Samaja Newspaper Downloader")
+st.title("Merged Page Downloader")
 st.write("Enter a date to download and merge all pages of the newspaper.")
 
 # User input for Cohere API Key
@@ -105,14 +122,18 @@ if st.button("Download Newspaper"):
             images = download_images(image_urls)
             # Create a temp file with date in the filename
             filename = f"newspaper_{date_str}.pdf"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}.pdf") as tmp:
-                pdf_path = merge_images_to_pdf(images, tmp.name)
-            st.success("Merged PDF created!")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_merged.pdf") as tmp_merged:
+                merged_pdf_path = merge_images_to_pdf(images, tmp_merged.name)
+            # Split and keep only the second half
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}.pdf") as tmp_half:
+                total_pages, second_half_pdf_path = split_pdf_second_half(merged_pdf_path, tmp_half.name)
+            st.success(f"Merged PDF created!.")
             # Provide download link with date-stamped filename
-            with open(pdf_path, "rb") as f:
+            with open(second_half_pdf_path, "rb") as f:
                 data = f.read()
             import base64
             b64 = base64.b64encode(data).decode()
-            href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Download merged newspaper PDF</a>'
+            href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Download the merged newspaper PDF</a>'
             st.markdown(href, unsafe_allow_html=True)
-            os.unlink(pdf_path)
+            os.unlink(merged_pdf_path)
+            os.unlink(second_half_pdf_path)

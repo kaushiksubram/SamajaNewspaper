@@ -1,0 +1,8 @@
+streamlit
+langchain
+cohere
+requests
+beautifulsoup4
+pillow
+langchain_community
+langchain_experimental

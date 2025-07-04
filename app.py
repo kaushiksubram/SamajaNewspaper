@@ -1,171 +1,100 @@
 import streamlit as st
-from langchain_community.llms import Cohere
-from langchain.agents import initialize_agent, Tool
-from langchain_experimental.tools.python.tool import PythonREPLTool
 import requests
-from bs4 import BeautifulSoup
-from PIL import Image
-from io import BytesIO
 import os
 import tempfile
+from PyPDF2 import PdfMerger
 import base64
-from PyPDF2 import PdfReader, PdfWriter
+from datetime import datetime
+import time
+from PIL import Image
+import fitz  # PyMuPDF
+import img2pdf
 
-# --- Helper Functions ---
-def scrape_newspaper_images(date_str, edcode):
-    """
-    Scrape all page image URLs for the given date and edition code from the newspaper site.
-    Returns a list of image URLs.
-    """
-    url = f"https://samajaepaper.in/indexnext.php?pagedate={date_str}&edcode={edcode}"
-    resp = requests.get(url)
-    soup = BeautifulSoup(resp.content, 'html.parser')
-    images = []
-    for img in soup.find_all('img'):
-        src = img.get('src')
-        if src and 'epaperimages' in src:
-            if not src.startswith('http'):
-                src = 'https://samajaepaper.in/indexnext.php?pagedate={date_str}&edcode={edcode}/' + src.lstrip('/')
-            images.append(src)
-    return images
+# --- Edition Mapping ---
+edition_map = {
+    "Cuttack": "ct",
+    "Bubhaneshwar": "bh",
+    "Sambalpur": "sa",
+    "Balasore": "ba",
+    "Berhampur": "br",
+    "Roukerla": "ro",
+    "Angul": "an",
+    "Koraput": "ko",
+    "Kolkata": "kk",
+    "Vizag": "vz"
+}
 
-def download_images(image_urls):
-    """Download images and return list of PIL Images."""
-    images = []
-    for url in image_urls:
-        resp = requests.get(url)
-        img = Image.open(BytesIO(resp.content))
-        images.append(img)
-    return images
-
-def merge_images_to_pdf(images, output_path):
-    """Merge PIL Images into a single PDF file."""
-    # Ensure all images are in RGB mode and only merge
-    rgb_images = [img.convert('RGB') for img in images]
-    if rgb_images:
-        rgb_images[0].save(output_path, save_all=True, append_images=rgb_images[1:], format='PDF')
-    return output_path
-
-def split_pdf_second_half(input_pdf_path, output_pdf_path):
-    """Split the PDF and save only the second half to output_pdf_path."""
-    reader = PdfReader(input_pdf_path)
-    total_pages = len(reader.pages)
-    half = total_pages // 2
-    # If odd, second half is larger
-    start = half
-    writer = PdfWriter()
-    for i in range(start, total_pages):
-        writer.add_page(reader.pages[i])
-    with open(output_pdf_path, 'wb') as f:
-        writer.write(f)
-    return total_pages, output_pdf_path
-
-def get_pdf_download_link(pdf_path):
-    with open(pdf_path, "rb") as f:
-        data = f.read()
-    b64 = base64.b64encode(data).decode()
-    href = f'<a href="data:application/pdf;base64,{b64}" download="newspaper.pdf">Download merged newspaper PDF</a>'
-    return href
-
+def pdf_page_to_jpg(pdf_path, jpg_path, quality, dpi):
+    """Convert a single-page PDF to JPG with reduced quality and DPI."""
+    with fitz.open(pdf_path) as doc:
+        page = doc[0]
+        pix = page.get_pixmap(dpi=dpi)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img.save(jpg_path, format='JPEG', quality=quality)
 
 # --- Streamlit UI ---
-st.title("Merged Newspaper Downloader")
-st.write("Enter a date to download and merge all pages of the newspaper.")
+st.title("Newspaper Downloader")
+st.write("Download the first 20 pages of the selected edition and date as a single merged PDF.")
 
-# User input for Cohere API Key
-
-cohere_api_key = st.text_input("Enter the provided Key", type="password")
-if not cohere_api_key:
-    st.warning("Please enter the provided API Key to continue.")
-    st.stop()
-
-
-# Validate Cohere API Key
-import cohere
-if cohere_api_key:
-    try:
-        co = cohere.Client(cohere_api_key)
-        # Use a minimal generate call for validation
-        _ = co.generate(prompt="Hello", max_tokens=1, model="command")
-    except Exception as e:
-        st.error("Invalid API Key. Please check your key and try again.")
-        st.stop()
-
-# --- Edition Selection ---
-edition_names = [
-    "Cuttack", "Bhubaneswar", "Sambalpur", "Balasore", "Berhampur",
-    "Rourkela", "Angul", "Koraput", "Kolkata", "Vizag"
-]
-edition_codes = [71, 73, 74, 75, 76, 77, 78, 79, 80, 81]
-edition_map = dict(zip(edition_names, edition_codes))
-
+edition_names = list(edition_map.keys())
 selected_edition = st.selectbox("Select Edition", edition_names)
-edcode = edition_map[selected_edition]
-
-# --- LangChain Agent Setup ---
-cohere_llm = Cohere(cohere_api_key=cohere_api_key)
-
-# Define tools for the agent
-scrape_tool = Tool(
-    name="Scrape Newspaper Images",
-    func=scrape_newspaper_images,
-    description="Scrape all page image URLs for a given date (YYYY-MM-DD) from the newspaper site."
-)
-download_tool = Tool(
-    name="Download Images",
-    func=download_images,
-    description="Download images from a list of URLs and return PIL Images."
-)
-merge_tool = Tool(
-    name="Merge Images to PDF",
-    func=merge_images_to_pdf,
-    description="Merge a list of PIL Images into a single PDF file."
-)
-
-
-agent = initialize_agent(
-    tools=[scrape_tool, download_tool, merge_tool, PythonREPLTool()],
-    llm=cohere_llm,
-    agent="zero-shot-react-description",
-    verbose=True
-)
-
+edition_code = edition_map[selected_edition]
 
 input_date = st.date_input("Select Date")
+
 if st.button("Download Newspaper"):
-    with st.spinner("Processing..."):
-        date_str = input_date.strftime('%Y-%m-%d')
-        # Agent orchestrates the process
-        image_urls = scrape_newspaper_images(date_str, edcode)
-        if not image_urls:
-            st.error("No images found for this date and edition.")
-        else:
-            images = download_images(image_urls)
-            # Create a temp file with date in the filename
-            filename = f"Samaja_{selected_edition}_{date_str}.pdf"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_merged.pdf") as tmp_merged:
-                merged_pdf_path = merge_images_to_pdf(images, tmp_merged.name)
-            # Split and keep only the second half
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_secondhalf.pdf") as tmp_half:
-                total_pages, second_half_pdf_path = split_pdf_second_half(merged_pdf_path, tmp_half.name)
-            # Now, split the second half to keep only the first 20 pages
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{date_str}_first20.pdf") as tmp_first20:
-                reader = PdfReader(second_half_pdf_path)
-                writer = PdfWriter()
-                n_pages = min(20, len(reader.pages))
-                for i in range(n_pages):
-                    writer.add_page(reader.pages[i])
-                with open(tmp_first20.name, 'wb') as f:
-                    writer.write(f)
-                first20_pdf_path = tmp_first20.name
-            st.success(f"Merged PDF created! Only the first 20 pages are included.")
-            # Provide download link with date-stamped filename
-            with open(first20_pdf_path, "rb") as f:
-                data = f.read()
-            import base64
-            b64 = base64.b64encode(data).decode()
-            href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Download the merged newspaper PDF</a>'
-            st.markdown(href, unsafe_allow_html=True)
-            os.unlink(merged_pdf_path)
-            os.unlink(second_half_pdf_path)
-            os.unlink(first20_pdf_path)
+    with st.spinner("Downloading and merging PDF pages..."):
+        date_str = input_date.strftime('%d%m%Y')  # DDMMYYYY
+        date_display = input_date.strftime('%d.%m.%Y')
+        pdf_urls = [
+            f"https://www.samajaepaper.in/epaperimages//{date_str}//{date_str}-md-{edition_code}-{i}.pdf"
+            for i in range(1, 21)
+        ]
+        temp_files = []
+        merger = PdfMerger()
+        try:
+            for url in pdf_urls:
+                try:
+                    resp = requests.get(url, timeout=10)
+                    if resp.status_code == 200:
+                        fd, temp_path = tempfile.mkstemp(suffix='.pdf')
+                        os.close(fd)
+                        time.sleep(0.5)  # Small delay to avoid overwhelming the server
+                        with open(temp_path, 'wb') as f:
+                            f.write(resp.content)
+                        # Convert the downloaded PDF page to JPG and back to PDF for size reduction
+                        fd2, jpg_path = tempfile.mkstemp(suffix='.jpg')
+                        os.close(fd2)
+                        pdf_page_to_jpg(temp_path, jpg_path, quality=25, dpi=120)
+                        # Convert JPG back to PDF
+                        fd3, compressed_pdf_path = tempfile.mkstemp(suffix='.pdf')
+                        os.close(fd3)
+                        with open(compressed_pdf_path, 'wb') as f:
+                            f.write(img2pdf.convert(jpg_path))
+                        merger.append(compressed_pdf_path)
+                        temp_files.append(temp_path)
+                        temp_files.append(jpg_path)
+                        temp_files.append(compressed_pdf_path)
+                    else:
+                        st.warning(f"Page not found: {url}")
+                except Exception as e:
+                    st.warning(f"Failed to download {url}: {e}")
+            if temp_files:
+                merged_filename = f"Samaja - {selected_edition} - {date_display}.pdf"
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_merged:
+                    merger.write(tmp_merged.name)
+                    merger.close()
+                    with open(tmp_merged.name, "rb") as f:
+                        data = f.read()
+                    b64 = base64.b64encode(data).decode()
+                    href = f'<a href="data:application/pdf;base64,{b64}" download="{merged_filename}">Download the merged newspaper PDF</a>'
+                    st.markdown(href, unsafe_allow_html=True)
+                os.unlink(tmp_merged.name)
+            else:
+                st.error("No pages were downloaded. Please check the date and edition.")
+        finally:
+            for file in temp_files:
+                try:
+                    os.unlink(file)
+                except Exception:
+                    pass

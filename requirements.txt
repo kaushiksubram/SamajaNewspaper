@@ -1,9 +1,10 @@
 streamlit
-langchain
-cohere
 requests
-beautifulsoup4
-pillow
-langchain_community
-langchain_experimental
+os
+tempfile
+base64
+time
 PyPDF2
+PIL
+fitz
+img2pdf

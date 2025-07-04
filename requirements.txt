@@ -1,8 +1,4 @@
 streamlit
-os
-tempfile
-base64
-time
 PyPDF2
 PIL
 fitz

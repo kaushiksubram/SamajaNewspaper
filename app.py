@@ -13,7 +13,7 @@ import img2pdf
 # --- Edition Mapping ---
 edition_map = {
     "Cuttack": "ct",
-    "Bubhaneshwar": "bh",
+    "Bhubaneshwar": "bh",
     "Sambalpur": "sa",
     "Balasore": "ba",
     "Berhampur": "br",
